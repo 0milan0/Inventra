@@ -17,7 +17,41 @@ export default function RootLayout() {
       <Stack>
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+        <Stack.Screen
+          name="modal-order-detail"
+          options={{
+            presentation: 'modal',
+            headerShown: false,
+            gestureEnabled: false,
+          }}
+        />
+        <Stack.Screen
+          name="modal-new-order"
+          options={{
+            presentation: 'modal',
+            headerShown: false,
+            gestureEnabled: false,
+          }}
+        />
+          <Stack.Screen
+            name="modal-order-contact"
+            options={{
+              presentation: 'modal',
+              headerShown: false,
+              gestureEnabled: false,
+            }}
+          />
+          <Stack.Screen
+            name="modal-contact-list"
+            options={{
+              presentation: 'modal',
+              headerShown: false,
+              gestureEnabled: false,
+            }}
+          />
         <Stack.Screen name="product/[barcode]" options={{ title: 'Product detail' }} />
+        <Stack.Screen name="order/new" options={{ presentation: 'modal', title: 'Nieuwe bestelling' }} />
+        <Stack.Screen name="order/[id]" options={{ presentation: 'modal', title: 'Order detail' }} />
       </Stack>
       <StatusBar style="auto" />
     </ThemeProvider>

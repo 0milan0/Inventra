@@ -45,11 +45,38 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="explore"
+        name="products"
         options={{
-          title: 'Explore',
+          title: 'Products',
           tabBarIcon: ({ color }) => (
-            <IconSymbol size={24} name="paperplane.fill" color={color} />
+            <IconSymbol size={24} name="bag.fill" color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="tht"
+        options={{
+          title: 'THT',
+          tabBarIcon: ({ color }) => (
+            <IconSymbol size={24} name="calendar" color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="orders-screen"
+        options={{
+          title: 'Bestellingen',
+          tabBarIcon: ({ color }) => (
+            <IconSymbol size={24} name="doc.text" color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="taken"
+        options={{
+          title: 'Taken',
+          tabBarIcon: ({ color }) => (
+            <IconSymbol size={24} name="doc.text" color={color} />
           ),
         }}
       />
