@@ -4,9 +4,13 @@
 
 ## 🎯 Over Inventra
 
-**Inventra** is een geavanceerde voorraadbeheer-applicatie die bedrijven helpt hun inventaris effectief te beheren. Met een intuïtief design en krachtige functies kunt u uw voorraden real-time volgen, beheren en optimaliseren.
+**Inventra** is een innovatieve en gebruiksvriendelijke oplossing die voorraadbeheer, personeelsmanagement en taakplanning samenbrengt in één krachtige app. Alles wat je nodig hebt om je dagelijkse werkzaamheden efficiënt te organiseren, overzichtelijk op één plek.
 
-De app is gebouwd met moderne technologieën (TypeScript, JavaScript) en Expo, waardoor het beschikbaar is op meerdere platforms.
+De app is ontwikkeld met zowel medewerkers als managers in gedachten en is eenvoudig te gebruiken op zowel smartphone als computer. Dankzij de moderne interface en slimme functies werk je sneller, overzichtelijker en met minder fouten.
+
+Met Inventra krijg je niet alleen meer controle over taken, voorraad en personeel, maar ook waardevolle inzichten die vaak verborgen blijven in traditionele systemen. Hierdoor kun je processen optimaliseren, beter inspelen op uitdagingen en de prestaties van je winkel naar een hoger niveau tillen.
+
+Slimmer werken, meer overzicht en betere resultaten – dat is de kracht van Inventra.
 
 ## ✨ Hoofdfuncties
 
