@@ -3,24 +3,24 @@ import React from 'react';
 
 import { HapticTab } from '@/components/haptic-tab';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { Colors } from '@/constants/theme';
+import { FontFamily, getPalette } from '@/constants/design-tokens';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Platform, StyleSheet } from 'react-native';
 
 export default function TabLayout() {
-  const colorScheme = useColorScheme();
-  const colors = Colors[colorScheme ?? 'light'];
+  const isDark = useColorScheme() === 'dark';
+  const p = getPalette(isDark);
 
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: colors.tint,
-        tabBarInactiveTintColor: colors.tabIconDefault,
+        tabBarActiveTintColor: p.accent,
+        tabBarInactiveTintColor: p.textMuted,
         headerShown: false,
         tabBarButton: HapticTab,
         tabBarStyle: {
-          backgroundColor: colors.background,
-          borderTopColor: colors.border,
+          backgroundColor: p.surface,
+          borderTopColor: p.border,
           borderTopWidth: StyleSheet.hairlineWidth,
           height: Platform.OS === 'ios' ? 82 : 64,
           paddingBottom: Platform.OS === 'ios' ? 24 : 10,
@@ -32,6 +32,7 @@ export default function TabLayout() {
           fontSize: 11,
           fontWeight: '500',
           marginTop: 2,
+          fontFamily: FontFamily,
         },
       }}
     >
@@ -54,11 +55,20 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="tht"
+        name="planning"
         options={{
-          title: 'THT',
+          title: 'Planning',
           tabBarIcon: ({ color }) => (
             <IconSymbol size={24} name="calendar" color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="plattegrond"
+        options={{
+          title: 'Plattegrond',
+          tabBarIcon: ({ color }) => (
+            <IconSymbol size={24} name="map.fill" color={color} />
           ),
         }}
       />
@@ -76,8 +86,14 @@ export default function TabLayout() {
         options={{
           title: 'Taken',
           tabBarIcon: ({ color }) => (
-            <IconSymbol size={24} name="doc.text" color={color} />
+            <IconSymbol size={24} name="list.bullet" color={color} />
           ),
+        }}
+      />
+      <Tabs.Screen
+        name="tht"
+        options={{
+          href: null,
         }}
       />
     </Tabs>

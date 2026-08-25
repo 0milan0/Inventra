@@ -1,5 +1,6 @@
 import ScannerModal from '@/components/scanner-modal';
 import { ThemedView } from '@/components/themed-view';
+import { getPalette } from '@/constants/design-tokens';
 import { products } from '@/data/products';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Link, router } from 'expo-router';
@@ -58,11 +59,12 @@ export default function ModalNewOrder() {
     setScannerOpen(true);
   };
 
-  const surface       = isDark ? '#2c2c2e' : '#ffffff';
-  const pageBg        = isDark ? '#1c1c1e' : '#f2f2f7';
-  const textPrimary   = isDark ? '#ffffff' : '#1a1a1a';
-  const textSecondary = isDark ? '#aaaaaa' : '#666666';
-  const border        = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
+  const p = getPalette(isDark);
+  const surface       = p.surface;
+  const pageBg        = p.bg;
+  const textPrimary   = p.text;
+  const textSecondary = p.textSecondary;
+  const border        = p.border;
 
   // ── Filtered products ──────────────────────────────────────────────────────
 

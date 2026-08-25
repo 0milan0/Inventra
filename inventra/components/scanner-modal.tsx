@@ -1,15 +1,22 @@
-import { Colors } from '@/constants/theme';
+import { getPalette } from '@/constants/design-tokens';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useEffect, useRef, useState } from 'react';
-import { Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { KeyboardAvoidingView, Modal, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 type ScanStatus = 'idle' | 'scanning' | 'found' | 'not_found';
+type ManualStatus = 'idle' | 'searching' | 'not_found';
 
 interface ScannerModalProps {
   visible: boolean;
-  onBarcodeScanned: (barcode: string) => void;
+  /**
+   * `false` teruggeven (of een Promise die naar `false` resolvet) houdt de
+   * camera open en toont "Barcode niet herkend" — voor schermen die zelf een
+   * opzoeking doen. Alles anders (`void`/`true`) sluit de camera zoals
+   * voorheen, meteen na de scan.
+   */
+  onBarcodeScanned: (barcode: string) => void | boolean | Promise<boolean | void>;
   onClose: () => void;
   isFocused?: boolean;
 }
@@ -23,12 +30,20 @@ export default function ScannerModal({
   const [scanStatus, setScanStatus] = useState<ScanStatus>('idle');
   const [permission, requestPermission] = useCameraPermissions();
   const colorScheme = useColorScheme();
-  const colors = Colors[colorScheme ?? 'light'];
+  const isDark = colorScheme === 'dark';
+  const p = getPalette(isDark);
   const scanCooldownRef = useRef(0);
+
+  const [manualMode, setManualMode] = useState(false);
+  const [manualBarcode, setManualBarcode] = useState('');
+  const [manualStatus, setManualStatus] = useState<ManualStatus>('idle');
 
   useEffect(() => {
     if (!visible) {
       setScanStatus('idle');
+      setManualMode(false);
+      setManualBarcode('');
+      setManualStatus('idle');
     }
   }, [visible]);
 
@@ -38,9 +53,18 @@ export default function ScannerModal({
     if (now - scanCooldownRef.current < 1200) return;
     scanCooldownRef.current = now;
     setScanStatus('scanning');
-    setTimeout(() => {
+    setTimeout(async () => {
+      const resultaat = await onBarcodeScanned(barcode);
+
+      if (resultaat === false) {
+        // Camera blijft open zodat de gebruiker het nog eens kan proberen —
+        // status keert vanzelf terug naar "Richt op een barcode".
+        setScanStatus('not_found');
+        setTimeout(() => setScanStatus((s) => (s === 'not_found' ? 'idle' : s)), 1500);
+        return;
+      }
+
       setScanStatus('found');
-      onBarcodeScanned(barcode);
       onClose();
     }, 250);
   };
@@ -50,12 +74,29 @@ export default function ScannerModal({
     runScan(data);
   };
 
+  const submitManual = async () => {
+    const code = manualBarcode.trim();
+    if (!code) return;
+    setManualStatus('searching');
+    const resultaat = await onBarcodeScanned(code);
+
+    if (resultaat === false) {
+      setManualStatus('not_found');
+      return;
+    }
+
+    setManualBarcode('');
+    setManualStatus('idle');
+    setManualMode(false);
+    onClose();
+  };
+
   const openCamera = async () => {
     if (!permission?.granted) await requestPermission();
     setScanStatus('idle');
   };
 
-  const tintAlpha = (opacity: string) => colors.tint + opacity;
+  const tintAlpha = (opacity: string) => p.accent + opacity;
 
   return (
     <Modal
@@ -81,11 +122,53 @@ export default function ScannerModal({
               <Text style={styles.closeBtnText}>✕</Text>
             </TouchableOpacity>
             <Text style={styles.modalTitle}>Barcode scannen</Text>
-            <View style={{ width: 36 }} />
+            <TouchableOpacity
+              onPress={() => {
+                setManualStatus('idle');
+                setManualMode((v) => !v);
+              }}
+              style={styles.closeBtn}
+              accessibilityLabel={manualMode ? 'Camera gebruiken' : 'Barcode handmatig invoeren'}
+            >
+              <Text style={styles.closeBtnText}>{manualMode ? '▦' : '⌨'}</Text>
+            </TouchableOpacity>
           </View>
         </SafeAreaView>
 
-        {permission?.granted ? (
+        {manualMode ? (
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={styles.manualWrap}
+          >
+            <View style={styles.manualCard}>
+              <Text style={styles.manualTitle}>Barcode handmatig invoeren</Text>
+              <Text style={styles.manualSub}>Bijvoorbeeld als de barcode beschadigd of onleesbaar is.</Text>
+              <TextInput
+                value={manualBarcode}
+                onChangeText={(v) => { setManualBarcode(v); if (manualStatus === 'not_found') setManualStatus('idle'); }}
+                placeholder="Voer barcode in…"
+                placeholderTextColor="#ffffff55"
+                keyboardType="number-pad"
+                autoFocus
+                style={[styles.manualInput, { borderColor: manualStatus === 'not_found' ? p.danger : '#ffffff33' }]}
+                onSubmitEditing={submitManual}
+                returnKeyType="search"
+              />
+              {manualStatus === 'not_found' && (
+                <Text style={[styles.manualFeedback, { color: p.danger }]}>Barcode niet herkend.</Text>
+              )}
+              <TouchableOpacity
+                style={[styles.manualSubmitBtn, { backgroundColor: p.accent, opacity: manualBarcode.trim() ? 1 : 0.5 }]}
+                onPress={submitManual}
+                disabled={!manualBarcode.trim() || manualStatus === 'searching'}
+              >
+                <Text style={styles.manualSubmitTxt}>
+                  {manualStatus === 'searching' ? 'Zoeken…' : 'Zoeken'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </KeyboardAvoidingView>
+        ) : permission?.granted ? (
           <View style={styles.fullCamera}>
             <CameraView
               style={StyleSheet.absoluteFill}
@@ -102,19 +185,19 @@ export default function ScannerModal({
             {/* Viewfinder box */}
             <View style={styles.viewfinderBox}>
               {/* Animated corner brackets */}
-              <View style={[styles.corner, styles.cTL, { borderColor: colors.tint }]} />
-              <View style={[styles.corner, styles.cTR, { borderColor: colors.tint }]} />
-              <View style={[styles.corner, styles.cBL, { borderColor: colors.tint }]} />
-              <View style={[styles.corner, styles.cBR, { borderColor: colors.tint }]} />
+              <View style={[styles.corner, styles.cTL, { borderColor: p.accent }]} />
+              <View style={[styles.corner, styles.cTR, { borderColor: p.accent }]} />
+              <View style={[styles.corner, styles.cBL, { borderColor: p.accent }]} />
+              <View style={[styles.corner, styles.cBR, { borderColor: p.accent }]} />
 
               {/* Scan line */}
               {scanStatus === 'scanning' && (
-                <View style={[styles.scanLine, { backgroundColor: colors.tint }]} />
+                <View style={[styles.scanLine, { backgroundColor: p.accent }]} />
               )}
 
               {/* Found flash */}
               {scanStatus === 'found' && (
-                <View style={[styles.foundFlash, { backgroundColor: colors.tint + '33' }]} />
+                <View style={[styles.foundFlash, { backgroundColor: p.accent + '33' }]} />
               )}
             </View>
 
@@ -126,15 +209,15 @@ export default function ScannerModal({
                   {
                     backgroundColor:
                       scanStatus === 'not_found'
-                        ? '#ef444422'
+                        ? p.dangerSoft
                         : scanStatus === 'found'
-                          ? '#22c55e22'
+                          ? p.successSoft
                           : '#00000066',
                     borderColor:
                       scanStatus === 'not_found'
-                        ? '#ef444455'
+                        ? p.danger
                         : scanStatus === 'found'
-                          ? '#22c55e55'
+                          ? p.success
                           : 'transparent',
                     borderWidth: 1,
                   },
@@ -146,11 +229,11 @@ export default function ScannerModal({
                     {
                       backgroundColor:
                         scanStatus === 'not_found'
-                          ? '#ef4444'
+                          ? p.danger
                           : scanStatus === 'found'
-                            ? '#22c55e'
+                            ? p.success
                             : scanStatus === 'scanning'
-                              ? colors.tint
+                              ? p.accent
                               : '#ffffff66',
                     },
                   ]}
@@ -161,9 +244,9 @@ export default function ScannerModal({
                     {
                       color:
                         scanStatus === 'not_found'
-                          ? '#ef4444'
+                          ? p.danger
                           : scanStatus === 'found'
-                            ? '#22c55e'
+                            ? p.success
                             : '#fff',
                     },
                   ]}
@@ -183,11 +266,11 @@ export default function ScannerModal({
             <View
               style={[
                 styles.permissionIcon,
-                { backgroundColor: colors.tint + '20', borderColor: colors.tint + '33' },
+                { backgroundColor: p.accent + '20', borderColor: p.accent + '33' },
               ]}
             >
-              <View style={[styles.permIconBody, { borderColor: colors.tint }]}>
-                <View style={[styles.permIconLens, { borderColor: colors.tint }]} />
+              <View style={[styles.permIconBody, { borderColor: p.accent }]}>
+                <View style={[styles.permIconLens, { borderColor: p.accent }]} />
               </View>
             </View>
             <Text style={styles.permissionTitle}>Cameratoegang nodig</Text>
@@ -195,11 +278,18 @@ export default function ScannerModal({
               Om barcodes te scannen heeft de app toegang tot de camera nodig.
             </Text>
             <TouchableOpacity
-              style={[styles.permissionBtn, { backgroundColor: colors.tint }]}
+              style={[styles.permissionBtn, { backgroundColor: p.accent }]}
               onPress={requestPermission}
               activeOpacity={0.85}
             >
               <Text style={styles.permissionBtnText}>Geef toegang</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.permissionManualBtn}
+              onPress={() => setManualMode(true)}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.permissionManualBtnText}>Of voer de barcode handmatig in</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -373,4 +463,43 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   permissionBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
+  permissionManualBtn: { marginTop: 4, paddingVertical: 8, paddingHorizontal: 12 },
+  permissionManualBtnText: { color: '#ffffff99', fontSize: 13, fontWeight: '600', textDecorationLine: 'underline' },
+
+  /* Manual entry */
+  manualWrap: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  manualCard: {
+    width: '100%',
+    maxWidth: 360,
+    gap: 12,
+    backgroundColor: '#ffffff0d',
+    borderWidth: 1,
+    borderColor: '#ffffff1f',
+    borderRadius: 16,
+    padding: 20,
+  },
+  manualTitle: { color: '#fff', fontSize: 16, fontWeight: '700', letterSpacing: -0.2 },
+  manualSub: { color: '#ffffff88', fontSize: 12.5, lineHeight: 18, marginTop: -6 },
+  manualInput: {
+    borderWidth: 1.5,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: '#fff',
+    letterSpacing: 0.5,
+  },
+  manualFeedback: { fontSize: 12.5, fontWeight: '600', marginTop: -4 },
+  manualSubmitBtn: {
+    borderRadius: 10,
+    paddingVertical: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  manualSubmitTxt: { color: '#fff', fontWeight: '700', fontSize: 14 },
 });

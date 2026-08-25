@@ -1,11 +1,21 @@
-import { DrawerMenu } from '@/components/drawer-menu';
 import ScannerModal from '@/components/scanner-modal';
-import { ThemedText } from '@/components/themed-text';
+import { ScreenHeader } from '@/components/screen-header';
 import { ThemedView } from '@/components/themed-view';
-import { products, updateProduct } from '@/data/products';
+import { FontFamily, getPalette, Radius, Spacing } from '@/constants/design-tokens';
+import { useAuth } from '@/contexts/auth-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ApiExpiringProduct,
+  ApiProduct,
+  getExpiringProducts,
+  getProduct,
+  getProductByPlu,
+  updateProductBranch,
+} from '@/lib/api';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
   Alert,
   Dimensions,
   NativeScrollEvent,
@@ -17,21 +27,31 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+
+const F = FontFamily;
+type Palette = ReturnType<typeof getPalette>;
+type Urgentie = 'danger' | 'warning' | 'success';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const THRESHOLD_DAYS = 5;
+const DATE_RE = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
 
 function daysUntil(tht: string): number {
   const diff = new Date(tht).getTime() - Date.now();
   return Math.ceil(diff / (1000 * 60 * 60 * 24));
 }
 
-function urgencyColor(days: number): string {
-  if (days <= 0) return '#E24B4A';
-  if (days <= 2) return '#BA7517';
-  return '#639922';
+function urgentieVan(days: number): Urgentie {
+  if (days <= 0) return 'danger';
+  if (days <= 2) return 'warning';
+  return 'success';
+}
+
+function urgentieKleur(p: Palette, urgentie: Urgentie): { fg: string; bg: string } {
+  if (urgentie === 'danger') return { fg: p.danger, bg: p.dangerSoft };
+  if (urgentie === 'warning') return { fg: p.warning, bg: p.warningSoft };
+  return { fg: p.success, bg: p.successSoft };
 }
 
 function urgencyLabel(days: number): string {
@@ -40,132 +60,370 @@ function urgencyLabel(days: number): string {
   return `${days} dagen`;
 }
 
-// ─── Product Card ─────────────────────────────────────────────────────────────
+/** Vult ontbrekende filiaal-velden aan met een lookup en werkt de THT bij. */
+async function slaThtOp(token: string, product: ApiProduct, nieuweTht: string) {
+  const f = product.filiaal;
+  await updateProductBranch(token, {
+    barcode: product.barcode,
+    opSchap: f.opSchap,
+    magazijn: f.magazijn,
+    kortsteTht: nieuweTht,
+    opslag: f.opslag,
+    biologisch: f.biologisch,
+    uitgelicht: f.uitgelicht,
+    notities: f.notities,
+  });
+}
 
-function ProductCard({
-  product,
-  isActive,
+// ─── Pagina 0 — Scannen / zoeken (altijd eerst) ───────────────────────────────
+
+function ScanPage({
   width,
-  surface,
-  border,
-  textPrimary,
-  textSecondary,
+  token,
+  onOpslaan,
+  onScanOpen,
+  scanResult,
+  onScanHandled,
+  p,
 }: {
-  product: ReturnType<typeof Object.values<any>>[0];
-  isActive: boolean;
   width: number;
-  surface: string;
-  border: string;
-  textPrimary: string;
-  textSecondary: string;
+  token: string | null;
+  onOpslaan: (barcode: string, nieuweTht: string) => Promise<void>;
+  onScanOpen: () => void;
+  scanResult: string | null;
+  onScanHandled: () => void;
+  p: Palette;
 }) {
-  const days = daysUntil(product.tht);
-  const color = urgencyColor(days);
-  const label = urgencyLabel(days);
+  const [invoer, setInvoer] = useState('');
+  const [zoekBezig, setZoekBezig] = useState(false);
+  const [zoekError, setZoekError] = useState<string | null>(null);
+  const [verified, setVerified] = useState<ApiProduct | null>(null);
+  const [ntht, setNtht] = useState('');
+  const [opslaanBezig, setOpslaanBezig] = useState(false);
 
-  return (
-    <View style={[cardStyles.page, { width }]}>
-      <View
-        style={[
-          cardStyles.card,
-          {
-            backgroundColor: surface,
-            borderColor: isActive ? color : border,
-            borderWidth: isActive ? 1.5 : 0.5,
-          },
-        ]}
-      >
-        {/* Urgency badge */}
-        <View style={[cardStyles.badge, { backgroundColor: color + '14' }]}>
-          <View style={[cardStyles.badgeDot, { backgroundColor: color }]} />
-          <Text style={[cardStyles.badgeText, { color }]}>{label}</Text>
+  const zoek = useCallback(async (code: string) => {
+    if (!token) return;
+    setZoekError(null);
+    setZoekBezig(true);
+    try {
+      const found = /^[0-9]{6}$/.test(code)
+        ? await getProductByPlu(token, code).catch(() => getProduct(token, code))
+        : await getProduct(token, code);
+      setVerified(found);
+      setNtht(found.filiaal.kortsteTht ?? '');
+    } catch (e) {
+      setZoekError(e instanceof Error ? e.message : `Geen product gevonden met "${code}".`);
+    } finally {
+      setZoekBezig(false);
+    }
+  }, [token]);
+
+  // Resultaat van de camera-scanner verwerken zodra deze pagina actief is.
+  useEffect(() => {
+    if (scanResult) {
+      setInvoer(scanResult);
+      zoek(scanResult);
+      onScanHandled();
+    }
+  }, [scanResult, zoek, onScanHandled]);
+
+  const reset = () => {
+    setVerified(null);
+    setInvoer('');
+    setZoekError(null);
+    setNtht('');
+  };
+
+  const handleOpslaan = async () => {
+    if (!verified) return;
+    if (ntht !== '' && !DATE_RE.test(ntht)) {
+      Alert.alert('Ongeldige datum', 'Gebruik het formaat JJJJ-MM-DD, bijv. 2025-06-15.');
+      return;
+    }
+    setOpslaanBezig(true);
+    try {
+      await onOpslaan(verified.barcode, ntht);
+      Alert.alert('Opgeslagen', ntht ? `THT bijgewerkt naar ${ntht}` : 'THT verwijderd.');
+      reset();
+    } catch (e) {
+      Alert.alert('Opslaan mislukt', e instanceof Error ? e.message : 'Er ging iets mis.');
+    } finally {
+      setOpslaanBezig(false);
+    }
+  };
+
+  if (verified) {
+    const days = verified.filiaal.kortsteTht ? daysUntil(verified.filiaal.kortsteTht) : null;
+    const { fg, bg } = days !== null
+      ? urgentieKleur(p, urgentieVan(days))
+      : { fg: p.textMuted, bg: p.surfaceAlt };
+    return (
+      <View style={[scanStyles.page, { width }]}>
+        <View style={[scanStyles.badge, { backgroundColor: bg }]}>
+          <View style={[scanStyles.badgeDot, { backgroundColor: fg }]} />
+          <Text style={[scanStyles.badgeText, { color: fg }]}>{days !== null ? urgencyLabel(days) : 'Geen THT'}</Text>
         </View>
 
-        <Text style={[cardStyles.name, { color: textPrimary }]} numberOfLines={2}>
-          {product.name}
+        <Text style={[scanStyles.name, { color: p.text }]} numberOfLines={2}>{verified.naam}</Text>
+        <Text style={[scanStyles.sub, { color: p.textSecondary }]} numberOfLines={1}>
+          {verified.barcode}{verified.filiaal.schapNaam ? ` · ${verified.filiaal.schapNaam}` : ''}
         </Text>
 
-        <View style={cardStyles.metaRow}>
-          <View style={cardStyles.metaItem}>
-            <Text style={[cardStyles.metaLabel, { color: textSecondary }]}>Art.nr</Text>
-            <Text style={[cardStyles.metaValue, { color: textPrimary }]}>
-              {product.articleNumber ?? '—'}
+        <View style={[scanStyles.updateBlock, { borderColor: p.border, backgroundColor: p.surfaceAlt }]}>
+          <View style={scanStyles.currentRow}>
+            <Ionicons name="calendar-outline" size={13} color={p.textMuted} />
+            <Text style={[scanStyles.currentText, { color: p.textMuted }]}>
+              Huidig: <Text style={{ color: fg, fontWeight: '700' }}>{verified.filiaal.kortsteTht ?? '—'}</Text>
             </Text>
           </View>
-          <View style={cardStyles.metaItem}>
-            <Text style={[cardStyles.metaLabel, { color: textSecondary }]}>Barcode</Text>
-            <Text style={[cardStyles.metaValue, { color: textPrimary }]}>{product.barcode}</Text>
-          </View>
-          <View style={cardStyles.metaItem}>
-            <Text style={[cardStyles.metaLabel, { color: textSecondary }]}>THT datum</Text>
-            <Text style={[cardStyles.metaValue, { color, fontWeight: '600' }]}>{product.tht}</Text>
-          </View>
+
+          <TextInput
+            value={ntht}
+            onChangeText={setNtht}
+            placeholder="Nieuwe THT: JJJJ-MM-DD (optioneel)"
+            placeholderTextColor={p.textMuted}
+            editable={!opslaanBezig}
+            keyboardType="numbers-and-punctuation"
+            maxLength={10}
+            returnKeyType="done"
+            onSubmitEditing={handleOpslaan}
+            style={[scanStyles.input, { borderColor: p.border, backgroundColor: p.bg, color: p.text }]}
+          />
+
+          <TouchableOpacity
+            style={[scanStyles.saveBtn, { backgroundColor: p.accent, opacity: opslaanBezig ? 0.7 : 1 }]}
+            onPress={handleOpslaan}
+            disabled={opslaanBezig}
+          >
+            {opslaanBezig ? <ActivityIndicator size="small" color="#fff" /> : <Text style={scanStyles.saveBtnText}>Opslaan</Text>}
+          </TouchableOpacity>
         </View>
+
+        <TouchableOpacity onPress={reset} disabled={opslaanBezig} style={scanStyles.resetBtn}>
+          <Ionicons name="arrow-undo-outline" size={13} color={p.textSecondary} />
+          <Text style={[scanStyles.resetText, { color: p.textSecondary }]}>Opnieuw zoeken</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  return (
+    <View style={[scanStyles.page, { width }]}>
+      <View style={[scanStyles.iconWrap, { backgroundColor: p.accentSoft }]}>
+        <Ionicons name="scan-outline" size={26} color={p.accent} />
+      </View>
+      <Text style={[scanStyles.title, { color: p.text }]}>Artikel controleren</Text>
+      <Text style={[scanStyles.titleSub, { color: p.textSecondary }]}>
+        Scan de barcode, of vul de barcode/het artikelnummer handmatig in.
+      </Text>
+
+      <TouchableOpacity
+        style={[scanStyles.scanBlock, { backgroundColor: p.accent }]}
+        onPress={onScanOpen}
+      >
+        <Ionicons name="camera-outline" size={19} color="#fff" />
+        <Text style={scanStyles.scanBlockText}>Scan barcode</Text>
+      </TouchableOpacity>
+
+      <View style={scanStyles.dividerRow}>
+        <View style={[scanStyles.dividerLine, { backgroundColor: p.divider }]} />
+        <Text style={[scanStyles.dividerLabel, { color: p.textMuted }]}>of</Text>
+        <View style={[scanStyles.dividerLine, { backgroundColor: p.divider }]} />
+      </View>
+
+      <TextInput
+        placeholder="Barcode of 6-cijferig artikelnummer"
+        placeholderTextColor={p.textMuted}
+        keyboardType="number-pad"
+        value={invoer}
+        editable={!zoekBezig}
+        onChangeText={(v) => { setInvoer(v); setZoekError(null); }}
+        style={[scanStyles.input, { borderColor: p.border, backgroundColor: p.surfaceAlt, color: p.text, width: '100%', maxWidth: 340 }]}
+        returnKeyType="done"
+        onSubmitEditing={() => invoer.trim() && zoek(invoer.trim())}
+      />
+
+      {!!zoekError && (
+        <View style={[scanStyles.errorBox, { backgroundColor: p.dangerSoft }]}>
+          <Ionicons name="alert-circle-outline" size={14} color={p.danger} />
+          <Text style={[scanStyles.errorText, { color: p.danger }]}>{zoekError}</Text>
+        </View>
+      )}
+
+      <TouchableOpacity
+        style={[scanStyles.primaryBtn, { borderColor: p.accent, opacity: zoekBezig ? 0.7 : 1 }]}
+        onPress={() => invoer.trim() ? zoek(invoer.trim()) : setZoekError('Vul een barcode of artikelnummer in.')}
+        disabled={zoekBezig}
+      >
+        {zoekBezig ? <ActivityIndicator size="small" color={p.accent} /> : <Text style={[scanStyles.primaryBtnText, { color: p.accent }]}>Controleren</Text>}
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+const scanStyles = StyleSheet.create({
+  page: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: Spacing.xl },
+  iconWrap: { width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center', marginBottom: Spacing.sm },
+  title: { fontSize: 18, fontWeight: '700', fontFamily: F },
+  titleSub: { fontSize: 12, fontFamily: F, textAlign: 'center', marginTop: 4, marginBottom: Spacing.lg, lineHeight: 17 },
+
+  scanBlock: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.sm,
+    borderRadius: Radius.md, paddingVertical: 15, width: '100%', maxWidth: 340,
+  },
+  scanBlockText: { fontSize: 14, fontWeight: '700', fontFamily: F, color: '#fff' },
+
+  dividerRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, width: '100%', maxWidth: 340, marginVertical: Spacing.md },
+  dividerLine: { flex: 1, height: 0.5 },
+  dividerLabel: { fontSize: 10, fontFamily: F, fontWeight: '600' },
+
+  input: { borderWidth: 0.5, borderRadius: Radius.md, paddingHorizontal: Spacing.md, paddingVertical: 11, fontSize: 13, fontFamily: F },
+
+  errorBox: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs + 2, borderRadius: Radius.md, padding: Spacing.sm + 2, width: '100%', maxWidth: 340, marginTop: Spacing.sm },
+  errorText: { flex: 1, fontSize: 11, fontFamily: F, fontWeight: '600' },
+
+  primaryBtn: { paddingVertical: 11, borderRadius: Radius.md, alignItems: 'center', width: '100%', maxWidth: 340, marginTop: Spacing.sm, borderWidth: 1.5 },
+  primaryBtnText: { fontWeight: '700', fontFamily: F, fontSize: 13 },
+
+  // Gevonden-product weergave (deelt de meeste stijlen met ExpiringPage)
+  badge: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 9, paddingVertical: 4, borderRadius: Radius.pill, gap: 5, marginBottom: Spacing.sm + 2 },
+  badgeDot: { width: 5, height: 5, borderRadius: 3 },
+  badgeText: { fontSize: 11, fontWeight: '700', fontFamily: F },
+  name: { fontSize: 18, fontWeight: '700', fontFamily: F, textAlign: 'center', lineHeight: 23 },
+  sub: { fontSize: 12, fontFamily: F, marginTop: 3, marginBottom: Spacing.lg },
+  updateBlock: { width: '100%', maxWidth: 340, borderWidth: 0.5, borderRadius: Radius.lg, padding: Spacing.md + 2, gap: Spacing.sm },
+  currentRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 2 },
+  currentText: { fontSize: 11.5, fontFamily: F },
+  saveBtn: { paddingVertical: 10, borderRadius: Radius.md, alignItems: 'center' },
+  saveBtnText: { color: '#fff', fontWeight: '700', fontFamily: F, fontSize: 13 },
+  resetBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: Spacing.md },
+  resetText: { fontSize: 12, fontFamily: F, fontWeight: '600' },
+});
+
+// ─── Verlopende producten — full-screen swipe-pagina's ────────────────────────
+
+function ExpiringPage({
+  product,
+  width,
+  onOpslaan,
+  p,
+}: {
+  product: ApiExpiringProduct;
+  width: number;
+  onOpslaan: (barcode: string, nieuweTht: string) => Promise<void>;
+  p: Palette;
+}) {
+  const [ntht, setNtht] = useState(product.kortsteTht);
+  const [bezig, setBezig] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const days = daysUntil(product.kortsteTht);
+  const urgentie = urgentieVan(days);
+  const { fg, bg } = urgentieKleur(p, urgentie);
+
+  const handleOpslaan = async () => {
+    if (!DATE_RE.test(ntht)) {
+      setError('Gebruik het formaat JJJJ-MM-DD.');
+      return;
+    }
+    setError(null);
+    setBezig(true);
+    try {
+      await onOpslaan(product.barcode, ntht);
+      Alert.alert('Opgeslagen', `THT bijgewerkt naar ${ntht}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Opslaan mislukt.');
+    } finally {
+      setBezig(false);
+    }
+  };
+
+  return (
+    <View style={[pageStyles.page, { width }]}>
+      <View style={[pageStyles.badge, { backgroundColor: bg }]}>
+        <View style={[pageStyles.badgeDot, { backgroundColor: fg }]} />
+        <Text style={[pageStyles.badgeText, { color: fg }]}>{urgencyLabel(days)}</Text>
+      </View>
+
+      <Text style={[pageStyles.name, { color: p.text }]} numberOfLines={2}>
+        {product.naam}
+      </Text>
+      <Text style={[pageStyles.sub, { color: p.textSecondary }]} numberOfLines={1}>
+        {product.barcode}{product.pluCode ? ` · art. ${product.pluCode}` : ''}
+      </Text>
+
+      <View style={[pageStyles.updateBlock, { borderColor: p.border, backgroundColor: p.surfaceAlt }]}>
+        <View style={pageStyles.currentRow}>
+          <Ionicons name="calendar-outline" size={13} color={p.textMuted} />
+          <Text style={[pageStyles.currentText, { color: p.textMuted }]}>
+            Huidig: <Text style={{ color: fg, fontWeight: '700' }}>{product.kortsteTht}</Text>
+          </Text>
+        </View>
+
+        <TextInput
+          value={ntht}
+          onChangeText={(v) => { setNtht(v); setError(null); }}
+          placeholder="JJJJ-MM-DD"
+          placeholderTextColor={p.textMuted}
+          editable={!bezig}
+          keyboardType="numbers-and-punctuation"
+          maxLength={10}
+          returnKeyType="done"
+          onSubmitEditing={handleOpslaan}
+          style={[pageStyles.input, { borderColor: p.border, backgroundColor: p.bg, color: p.text }]}
+        />
+
+        {!!error && <Text style={[pageStyles.error, { color: p.danger }]}>{error}</Text>}
+
+        <TouchableOpacity
+          style={[pageStyles.saveBtn, { backgroundColor: p.accent, opacity: bezig ? 0.7 : 1 }]}
+          onPress={handleOpslaan}
+          disabled={bezig}
+        >
+          {bezig ? <ActivityIndicator size="small" color="#fff" /> : <Text style={pageStyles.saveBtnText}>Opslaan</Text>}
+        </TouchableOpacity>
       </View>
     </View>
   );
 }
 
-const cardStyles = StyleSheet.create({
-  page: {
-    paddingHorizontal: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  card: {
-    borderRadius: 20,
-    padding: 20,
-    width: '100%',
-    gap: 14,
-  },
+const pageStyles = StyleSheet.create({
+  page: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: Spacing.xl },
   badge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    borderRadius: 999,
-    gap: 5,
+    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 9, paddingVertical: 4,
+    borderRadius: Radius.pill, gap: 5, marginBottom: Spacing.sm + 2,
   },
   badgeDot: { width: 5, height: 5, borderRadius: 3 },
-  badgeText: { fontSize: 11, fontWeight: '500', fontFamily: 'Montserrat' },
-  name: { fontSize: 18, fontWeight: '500', fontFamily: 'Montserrat', lineHeight: 24 },
-  metaRow: { flexDirection: 'row', gap: 18, flexWrap: 'wrap' },
-  metaItem: { gap: 2 },
-  metaLabel: {
-    fontSize: 10,
-    fontFamily: 'Montserrat',
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
+  badgeText: { fontSize: 11, fontWeight: '700', fontFamily: F },
+  name: { fontSize: 18, fontWeight: '700', fontFamily: F, textAlign: 'center', lineHeight: 23 },
+  sub: { fontSize: 12, fontFamily: F, marginTop: 3, marginBottom: Spacing.lg },
+  updateBlock: {
+    width: '100%', maxWidth: 340, borderWidth: 0.5, borderRadius: Radius.lg,
+    padding: Spacing.md + 2, gap: Spacing.sm,
   },
-  metaValue: { fontSize: 13, fontFamily: 'Montserrat', fontWeight: '500' },
+  currentRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 2 },
+  currentText: { fontSize: 11.5, fontFamily: F },
+  input: {
+    borderWidth: 0.5, borderRadius: Radius.md, paddingHorizontal: Spacing.md,
+    paddingVertical: 9, fontSize: 13, fontFamily: F,
+  },
+  error: { fontSize: 11, fontFamily: F, fontWeight: '600' },
+  saveBtn: { paddingVertical: 10, borderRadius: Radius.md, alignItems: 'center' },
+  saveBtnText: { color: '#fff', fontWeight: '700', fontFamily: F, fontSize: 13 },
 });
 
 // ─── Pagination Dots ──────────────────────────────────────────────────────────
 
-function PaginationDots({
-  count,
-  activeIndex,
-  tint,
-  inactive,
-}: {
-  count: number;
-  activeIndex: number;
-  tint: string;
-  inactive: string;
-}) {
+function PaginationDots({ count, activeIndex, p }: { count: number; activeIndex: number; p: Palette }) {
   if (count <= 1) return null;
   return (
-    <View style={dotStyles.row}>
+    <View style={dotStyles.row} pointerEvents="none">
       {Array.from({ length: count }).map((_, i) => (
         <View
           key={i}
           style={[
             dotStyles.dot,
-            {
-              backgroundColor: i === activeIndex ? tint : inactive,
-              width: i === activeIndex ? 16 : 5,
-            },
+            { backgroundColor: i === activeIndex ? p.accent : p.border, width: i === activeIndex ? 16 : 5 },
           ]}
         />
       ))}
@@ -174,76 +432,8 @@ function PaginationDots({
 }
 
 const dotStyles = StyleSheet.create({
-  row: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 5,
-    marginTop: 10,
-  },
+  row: { position: 'absolute', bottom: 14, left: 0, right: 0, flexDirection: 'row', justifyContent: 'center', gap: 5 },
   dot: { height: 5, borderRadius: 3 },
-});
-
-// ─── Empty State ──────────────────────────────────────────────────────────────
-
-function EmptyState({ textSecondary }: { textSecondary: string }) {
-  return (
-    <View style={emptyStyles.wrap}>
-      <View style={emptyStyles.iconWrap}>
-        <Text style={emptyStyles.emoji}>✓</Text>
-      </View>
-      <Text style={[emptyStyles.title, { color: textSecondary }]}>Alles in orde</Text>
-      <Text style={[emptyStyles.sub, { color: textSecondary }]}>
-        Geen producten verlopen binnen {THRESHOLD_DAYS} dagen.
-      </Text>
-    </View>
-  );
-}
-
-const emptyStyles = StyleSheet.create({
-  wrap: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 40,
-  },
-  iconWrap: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#63992218',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 4,
-  },
-  emoji: { fontSize: 24, color: '#639922' },
-  title: { fontSize: 16, fontWeight: '500', fontFamily: 'Montserrat' },
-  sub: {
-    fontSize: 12,
-    fontFamily: 'Montserrat',
-    textAlign: 'center',
-    paddingHorizontal: 32,
-    lineHeight: 18,
-  },
-});
-
-// ─── Divider Row ──────────────────────────────────────────────────────────────
-
-function DividerRow({ border, textSecondary }: { border: string; textSecondary: string }) {
-  return (
-    <View style={divStyles.row}>
-      <View style={[divStyles.line, { backgroundColor: border }]} />
-      <Text style={[divStyles.label, { color: textSecondary }]}>of</Text>
-      <View style={[divStyles.line, { backgroundColor: border }]} />
-    </View>
-  );
-}
-
-const divStyles = StyleSheet.create({
-  row: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  line: { flex: 1, height: 0.5 },
-  label: { fontSize: 10, fontFamily: 'Montserrat', fontWeight: '500' },
 });
 
 // ─── Main Screen ──────────────────────────────────────────────────────────────
@@ -251,396 +441,79 @@ const divStyles = StyleSheet.create({
 export default function ThtScreen() {
   const colorScheme = useColorScheme();
   const isDark = colorScheme === 'dark';
-
-  // ── Colors ───────────────────────────────────────────────────────────────
-  const surface       = isDark ? '#2c2c2e' : '#ffffff';
-  const pageBg        = isDark ? '#1c1c1e' : '#f2f2f7';
-  const textPrimary   = isDark ? '#ffffff' : '#1a1a1a';
-  const textSecondary = isDark ? '#8e8e93' : '#6c6c70';
-  const border        = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.07)';
-  const tint          = '#534AB7';
-  const inputBg       = isDark ? '#3a3a3c' : '#f8f8f8';
-  const inactive      = isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.10)';
-
-  // ── State ────────────────────────────────────────────────────────────────
-  const [drawerOpen, setDrawerOpen]           = useState(false);
-  const [scanOpen, setScanOpen]               = useState(false);
-  const [verifyBarcode, setVerifyBarcode]     = useState('');
-  const [verifyArticle, setVerifyArticle]     = useState('');
-  const [verifiedProduct, setVerifiedProduct] = useState<ReturnType<typeof Object.values<any>>[0] | null>(null);
-  const [verifyError, setVerifyError]         = useState<string | null>(null);
-  const [newTht, setNewTht]                   = useState('');
-  const [activeIndex, setActiveIndex]         = useState(0);
-  const scrollRef = useRef<ScrollView | null>(null);
+  const p = getPalette(isDark);
+  const { token } = useAuth();
   const { width } = Dimensions.get('window');
 
-  // ── Derived data ─────────────────────────────────────────────────────────
-  const threshold = useMemo(() => {
-    const d = new Date();
-    d.setDate(d.getDate() + THRESHOLD_DAYS);
-    return d;
-  }, []);
+  const [expiring, setExpiring] = useState<ApiExpiringProduct[]>([]);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const scrollRef = useRef<ScrollView | null>(null);
 
-  const expiring = useMemo(() => {
-    return Object.values(products)
-      .filter((p) => {
-        if (!p.tht || p.tht === 'n.v.t.') return false;
-        return new Date(p.tht) <= threshold;
-      })
-      .sort((a, b) => new Date(a.tht).getTime() - new Date(b.tht).getTime());
-  }, [threshold]);
+  const [scanOpen, setScanOpen] = useState(false);
+  const [scanResult, setScanResult] = useState<string | null>(null);
 
-  const expiredCount = useMemo(
-    () => expiring.filter((p) => daysUntil(p.tht) <= 0).length,
-    [expiring],
-  );
-  const urgentCount = useMemo(
-    () => expiring.filter((p) => daysUntil(p.tht) > 0).length,
-    [expiring],
-  );
+  const laadExpiring = useCallback(async () => {
+    if (!token) return;
+    try {
+      setExpiring(await getExpiringProducts(token, THRESHOLD_DAYS));
+    } catch {
+      // Stil falen — scannen/zoeken blijft altijd bruikbaar.
+    }
+  }, [token]);
 
-  // ── Scroll to first card on mount ────────────────────────────────────────
+  useEffect(() => { laadExpiring(); }, [laadExpiring]);
+
+  const totaalPaginas = 1 + expiring.length;
+
   useEffect(() => {
-    if (expiring.length > 0) {
-      setActiveIndex(0);
-      setTimeout(() => scrollRef.current?.scrollTo({ x: 0, animated: false }), 50);
-    }
-  }, [expiring]);
-
-  // ── Helpers ───────────────────────────────────────────────────────────────
-  const scrollToProduct = (barcode: string) => {
-    const idx = expiring.findIndex((e) => e.barcode === barcode);
-    if (idx >= 0) {
-      setActiveIndex(idx);
-      scrollRef.current?.scrollTo({ x: idx * width, animated: true });
-    }
-  };
-
-  // ── Handlers ─────────────────────────────────────────────────────────────
-  const handleVerify = () => {
-    setVerifyError(null);
-    const barcodeInput = verifyBarcode.trim();
-    const articleInput = verifyArticle.trim();
-
-    if (!barcodeInput && !articleInput) {
-      setVerifyError('Vul de barcode of het artikelnummer in.');
-      return;
-    }
-
-    if (barcodeInput) {
-      const found = products[barcodeInput];
-      if (!found) {
-        setVerifyError(`Geen product gevonden met barcode "${barcodeInput}".`);
-        return;
-      }
-      setVerifiedProduct(found);
-      setNewTht(found.tht === 'n.v.t.' ? '' : found.tht);
-      scrollToProduct(found.barcode);
-      return;
-    }
-
-    if (articleInput) {
-      if (!/^[0-9]{6}$/.test(articleInput)) {
-        setVerifyError('Artikelnummer moet precies 6 cijfers bevatten.');
-        return;
-      }
-      const found = Object.values(products).find((p) => p.articleNumber === articleInput);
-      if (!found) {
-        setVerifyError(`Geen product gevonden met artikelnummer "${articleInput}".`);
-        return;
-      }
-      setVerifiedProduct(found);
-      setNewTht(found.tht === 'n.v.t.' ? '' : found.tht);
-      scrollToProduct(found.barcode);
-    }
-  };
-
-  const handleScan = (code: string) => {
-    setScanOpen(false);
-    setVerifyError(null);
-    const found = products[code] ?? Object.values(products).find((p) => p.articleNumber === code);
-    if (!found) {
-      setVerifyError(`Geen product gevonden met gescande code "${code}".`);
-      return;
-    }
-    setVerifiedProduct(found);
-    setVerifyBarcode(code);
-    setVerifyArticle('');
-    setNewTht(found.tht === 'n.v.t.' ? '' : found.tht);
-    scrollToProduct(found.barcode);
-  };
-
-  const handleSaveTht = () => {
-    if (!verifiedProduct) return;
-    if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(newTht)) {
-      Alert.alert('Ongeldige datum', 'Gebruik het formaat JJJJ-MM-DD, bijv. 2025-06-15.');
-      return;
-    }
-    verifiedProduct.tht = newTht;
-    updateProduct(verifiedProduct);
-    Alert.alert('Opgeslagen', `THT bijgewerkt naar ${newTht}`);
-    setVerifiedProduct(null);
-    setVerifyBarcode('');
-    setVerifyArticle('');
-    setNewTht('');
-  };
+    setActiveIndex((i) => Math.min(i, totaalPaginas - 1));
+  }, [totaalPaginas]);
 
   const handleScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const idx = Math.round(e.nativeEvent.contentOffset.x / width);
-    const p = expiring[idx];
-    if (p) setActiveIndex(idx);
+    setActiveIndex(Math.round(e.nativeEvent.contentOffset.x / width));
   };
 
-  const handleReset = () => {
-    setVerifiedProduct(null);
-    setVerifyBarcode('');
-    setVerifyArticle('');
-    setVerifyError(null);
-    setNewTht('');
-  };
+  const handleOpslaan = useCallback(async (barcode: string, nieuweTht: string) => {
+    if (!token) throw new Error('Niet ingelogd.');
+    const found = await getProduct(token, barcode);
+    await slaThtOp(token, found, nieuweTht);
+    await laadExpiring();
+  }, [token, laadExpiring]);
 
-  // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <ThemedView style={[styles.container, { backgroundColor: pageBg }]}>
-      {/* Header */}
-      <SafeAreaView edges={['top']} style={{ backgroundColor: pageBg }}>
-        <View style={[styles.header, { backgroundColor: pageBg }]}>
-          <TouchableOpacity
-            onPress={() => setDrawerOpen(true)}
-            style={styles.hamburgerBtn}
-            accessibilityLabel="Open menu"
-          >
-            <View style={[styles.bar, { backgroundColor: textPrimary }]} />
-            <View style={[styles.bar, { backgroundColor: textPrimary }]} />
-            <View style={[styles.bar, { backgroundColor: textPrimary, width: 12 }]} />
-          </TouchableOpacity>
+    <ThemedView style={[styles.container, { backgroundColor: p.bg }]}>
+      <ScreenHeader title="THT Controle" />
 
-          <ThemedText style={styles.headerTitle}>THT Controle</ThemedText>
-
-          <View
-            style={[
-              styles.countBadge,
-              { backgroundColor: expiredCount > 0 ? '#E24B4A' : tint },
-            ]}
-          >
-            <Text style={styles.countBadgeText}>{expiring.length}</Text>
-          </View>
-        </View>
-      </SafeAreaView>
-
-      {/* Summary strip */}
-      {expiring.length > 0 && (
-        <View style={[styles.summaryCard, { backgroundColor: surface, borderColor: border }]}>
-          <View style={styles.summaryItem}>
-            <Text style={[styles.summaryValue, { color: '#E24B4A' }]}>{expiredCount}</Text>
-            <Text style={[styles.summaryLabel, { color: textSecondary }]}>Verlopen</Text>
-          </View>
-          <View style={[styles.summaryDivider, { backgroundColor: border }]} />
-          <View style={styles.summaryItem}>
-            <Text style={[styles.summaryValue, { color: '#BA7517' }]}>{urgentCount}</Text>
-            <Text style={[styles.summaryLabel, { color: textSecondary }]}>Bijna verlopen</Text>
-          </View>
-          <View style={[styles.summaryDivider, { backgroundColor: border }]} />
-          <View style={styles.summaryItem}>
-            <Text style={[styles.summaryValue, { color: textPrimary }]}>{expiring.length}</Text>
-            <Text style={[styles.summaryLabel, { color: textSecondary }]}>Totaal</Text>
-          </View>
-        </View>
-      )}
-
-      <ScrollView
-        contentContainerStyle={[styles.content, { backgroundColor: pageBg }]}
-        showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
-      >
-        {/* Cards swiper */}
-        {expiring.length === 0 ? (
-          <EmptyState textSecondary={textSecondary} />
-        ) : (
-          <View style={styles.swiperWrapper}>
-            <ScrollView
-              ref={(r) => (scrollRef.current = r)}
-              horizontal
-              pagingEnabled
-              showsHorizontalScrollIndicator={false}
-              style={[styles.swiper, { width }]}
-              onMomentumScrollEnd={handleScroll}
-              contentContainerStyle={{ alignItems: 'center' }}
-            >
-              {expiring.map((p, i) => (
-                <ProductCard
-                  key={p.barcode}
-                  product={p}
-                  isActive={i === activeIndex}
-                  width={width}
-                  surface={surface}
-                  border={border}
-                  textPrimary={textPrimary}
-                  textSecondary={textSecondary}
-                />
-              ))}
-            </ScrollView>
-
-            <PaginationDots
-              count={expiring.length}
-              activeIndex={activeIndex}
-              tint={tint}
-              inactive={inactive}
-            />
-          </View>
-        )}
-
-        {/* ── Stap 1: Verificatie ─────────────────────────────────────────── */}
-        <View style={[styles.card, { backgroundColor: surface, borderColor: border }]}>
-          <Text style={[styles.sectionTitle, { color: textPrimary }]}>
-            Stap 1 — Verificeer artikel
-          </Text>
-          <Text style={[styles.sectionSub, { color: textSecondary }]}>
-            Scan, barcode of artikelnummer — gebruik één methode.
-          </Text>
-
-          {/* Scan knop */}
-          <TouchableOpacity
-            style={[styles.scanBlock, { backgroundColor: tint + '12', borderColor: tint }]}
-            onPress={() => setScanOpen(true)}
-            accessibilityLabel="Scan barcode"
-          >
-            <Text style={[styles.scanIcon]}>📷</Text>
-            <Text style={[styles.scanBlockText, { color: tint }]}>Scan barcode</Text>
-          </TouchableOpacity>
-
-          <DividerRow border={border} textSecondary={textSecondary} />
-
-          {/* Barcode invoer */}
-          <TextInput
-            placeholder="Barcode (numeriek)"
-            placeholderTextColor={textSecondary}
-            keyboardType="number-pad"
-            value={verifyBarcode}
-            onChangeText={(v) => {
-              setVerifyBarcode(v);
-              setVerifyArticle('');
-              setVerifyError(null);
-              setVerifiedProduct(null);
-            }}
-            style={[
-              styles.input,
-              { borderColor: border, backgroundColor: inputBg, color: textPrimary },
-            ]}
-            returnKeyType="done"
-            onSubmitEditing={handleVerify}
+      <View style={styles.content}>
+        <ScrollView
+          ref={scrollRef}
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          onMomentumScrollEnd={handleScroll}
+          style={styles.pager}
+          keyboardShouldPersistTaps="handled"
+        >
+          <ScanPage
+            width={width}
+            token={token}
+            onOpslaan={handleOpslaan}
+            onScanOpen={() => setScanOpen(true)}
+            scanResult={scanResult}
+            onScanHandled={() => setScanResult(null)}
+            p={p}
           />
+          {expiring.map((product) => (
+            <ExpiringPage key={product.barcode} product={product} width={width} onOpslaan={handleOpslaan} p={p} />
+          ))}
+        </ScrollView>
+        <PaginationDots count={totaalPaginas} activeIndex={activeIndex} p={p} />
+      </View>
 
-          <DividerRow border={border} textSecondary={textSecondary} />
-
-          {/* Artikelnummer invoer */}
-          <TextInput
-            placeholder="6-cijferig artikelnummer"
-            placeholderTextColor={textSecondary}
-            keyboardType="number-pad"
-            value={verifyArticle}
-            onChangeText={(v) => {
-              setVerifyArticle(v);
-              setVerifyBarcode('');
-              setVerifyError(null);
-              setVerifiedProduct(null);
-            }}
-            style={[
-              styles.input,
-              { borderColor: border, backgroundColor: inputBg, color: textPrimary },
-            ]}
-            maxLength={6}
-            returnKeyType="done"
-            onSubmitEditing={handleVerify}
-          />
-
-          {/* Foutmelding */}
-          {verifyError && (
-            <View
-              style={[
-                styles.errorBox,
-                { backgroundColor: '#E24B4A0f', borderColor: '#E24B4A50' },
-              ]}
-            >
-              <Text style={styles.errorText}>⚠️ {verifyError}</Text>
-            </View>
-          )}
-
-          <TouchableOpacity
-            style={[styles.primaryBtn, { backgroundColor: tint }]}
-            onPress={handleVerify}
-            accessibilityLabel="Controleer artikel"
-          >
-            <Text style={styles.primaryBtnText}>Controleer artikel</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* ── Stap 2: THT bijwerken ────────────────────────────────────────── */}
-        {verifiedProduct && (
-          <View
-            style={[
-              styles.card,
-              { backgroundColor: surface, borderColor: tint, borderWidth: 1.5 },
-            ]}
-          >
-            <View style={styles.verifiedHeader}>
-              <View style={[styles.checkCircle, { backgroundColor: '#63992218' }]}>
-                <Text style={{ fontSize: 16, color: '#639922' }}>✓</Text>
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.sectionTitle, { color: textPrimary }]}>
-                  Stap 2 — THT bijwerken
-                </Text>
-                <Text
-                  style={[styles.verifiedName, { color: textSecondary }]}
-                  numberOfLines={1}
-                >
-                  {verifiedProduct.name}
-                </Text>
-              </View>
-            </View>
-
-            <Text style={[styles.sectionSub, { color: textSecondary }]}>
-              Nieuwe THT (JJJJ-MM-DD)
-            </Text>
-            <TextInput
-              value={newTht}
-              onChangeText={setNewTht}
-              placeholder="2025-06-30"
-              placeholderTextColor={textSecondary}
-              style={[
-                styles.input,
-                { borderColor: border, backgroundColor: inputBg, color: textPrimary },
-              ]}
-              keyboardType="numbers-and-punctuation"
-              maxLength={10}
-              returnKeyType="done"
-              onSubmitEditing={handleSaveTht}
-            />
-
-            <View style={styles.saveRow}>
-              <TouchableOpacity
-                style={[styles.cancelBtn, { borderColor: border }]}
-                onPress={handleReset}
-              >
-                <Text style={[styles.cancelBtnText, { color: textSecondary }]}>Annuleren</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.saveBtn, { backgroundColor: tint }]}
-                onPress={handleSaveTht}
-              >
-                <Text style={styles.saveBtnText}>Opslaan</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
-      </ScrollView>
-
-      <DrawerMenu isOpen={drawerOpen} onClose={() => setDrawerOpen(false)} />
       <ScannerModal
         visible={scanOpen}
         isFocused={scanOpen}
-        onBarcodeScanned={handleScan}
+        onBarcodeScanned={(code) => { setScanOpen(false); setScanResult(code); }}
         onClose={() => setScanOpen(false)}
       />
     </ThemedView>
@@ -651,145 +524,6 @@ export default function ThtScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-
-  // Header
-  header: {
-    height: 52,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 18,
-  },
-  hamburgerBtn: {
-    width: 36,
-    height: 36,
-    justifyContent: 'center',
-    alignItems: 'flex-start',
-    gap: 4,
-  },
-  bar: { height: 1.5, borderRadius: 2, width: 18 },
-  headerTitle: {
-    fontSize: 15,
-    fontWeight: '500',
-    letterSpacing: 0.1,
-    fontFamily: 'Montserrat',
-  },
-  countBadge: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  countBadgeText: {
-    color: '#fff',
-    fontSize: 11,
-    fontWeight: '500',
-    fontFamily: 'Montserrat',
-  },
-
-  // Summary card
-  summaryCard: {
-    flexDirection: 'row',
-    justifyContent: 'space-evenly',
-    marginHorizontal: 14,
-    marginBottom: 14,
-    borderRadius: 16,
-    borderWidth: 0.5,
-    paddingVertical: 14,
-  },
-  summaryItem: { alignItems: 'center', gap: 2 },
-  summaryValue: { fontSize: 20, fontWeight: '500', fontFamily: 'Montserrat' },
-  summaryLabel: { fontSize: 10, fontFamily: 'Montserrat', textTransform: 'uppercase', letterSpacing: 0.3 },
-  summaryDivider: { width: 0.5, marginVertical: 4 },
-
-  // Content scroll
-  content: { paddingBottom: 40, gap: 10 },
-
-  // Swiper
-  swiperWrapper: { marginTop: 6 },
-  swiper: { height: 210 },
-
-  // Cards (controls)
-  card: {
-    marginHorizontal: 14,
-    borderRadius: 16,
-    borderWidth: 0.5,
-    padding: 16,
-    gap: 10,
-  },
-  sectionTitle: { fontSize: 13, fontWeight: '500', fontFamily: 'Montserrat' },
-  sectionSub: { fontSize: 11, fontFamily: 'Montserrat', lineHeight: 16 },
-
-  // Scan block
-  scanBlock: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    borderWidth: 1.5,
-    borderRadius: 12,
-    borderStyle: 'dashed',
-    paddingVertical: 13,
-  },
-  scanIcon: { fontSize: 18 },
-  scanBlockText: { fontSize: 13, fontWeight: '500', fontFamily: 'Montserrat' },
-
-  // Input
-  input: {
-    borderWidth: 0.5,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 13,
-    fontFamily: 'Montserrat',
-  },
-
-  // Error
-  errorBox: { borderWidth: 0.5, borderRadius: 10, padding: 10 },
-  errorText: { fontSize: 11, fontFamily: 'Montserrat', fontWeight: '500', color: '#A32D2D' },
-
-  // Primary button
-  primaryBtn: {
-    paddingVertical: 11,
-    borderRadius: 10,
-    alignItems: 'center',
-  },
-  primaryBtnText: {
-    color: '#fff',
-    fontWeight: '500',
-    fontFamily: 'Montserrat',
-    fontSize: 13,
-  },
-
-  // Verified header
-  verifiedHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  checkCircle: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    justifyContent: 'center',
-    alignItems: 'center',
-    flexShrink: 0,
-  },
-  verifiedName: { fontSize: 11, fontFamily: 'Montserrat', marginTop: 1 },
-
-  // Save row
-  saveRow: { flexDirection: 'row', gap: 8, marginTop: 2 },
-  cancelBtn: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 10,
-    borderWidth: 0.5,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cancelBtnText: { fontWeight: '500', fontFamily: 'Montserrat', fontSize: 12 },
-  saveBtn: {
-    flex: 1,
-    paddingVertical: 11,
-    borderRadius: 10,
-    alignItems: 'center',
-  },
-  saveBtnText: { color: '#fff', fontWeight: '500', fontFamily: 'Montserrat', fontSize: 13 },
+  content: { flex: 1 },
+  pager: { flex: 1 },
 });

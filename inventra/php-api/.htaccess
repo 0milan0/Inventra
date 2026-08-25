@@ -1,0 +1,10 @@
+# Sommige (gedeelde) hosting-configuraties geven de Authorization-header
+# niet door aan PHP — dit zorgt dat Bearer-tokens toch aankomen.
+RewriteEngine On
+RewriteCond %{HTTP:Authorization} ^(.*)
+RewriteRule .* - [E=HTTP_AUTHORIZATION:%1]
+
+# config.php bevat DB- en JWT-secrets en mag nooit direct opgevraagd kunnen worden.
+<Files "config.php">
+    Require all denied
+</Files>

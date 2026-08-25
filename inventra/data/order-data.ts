@@ -1,5 +1,7 @@
 // data/order-data.ts
 
+import type { getPalette } from '@/constants/design-tokens';
+
 export type OrderStatus =
   | 'geplaatst'
   | 'bevestigd'
@@ -245,3 +247,49 @@ export const ALL_ORDERS: Order[] = [
     ],
   },
 ];
+
+// ─── Status- & statistiekhelpers ─────────────────────────────────────────────
+// Gedeeld tussen orders-screen.tsx en modal-order-detail.tsx zodat de
+// status-chip er overal exact hetzelfde uitziet.
+
+type Palette = ReturnType<typeof getPalette>;
+
+export const STATUS_FILTERS: OrderStatus[] = ['geplaatst', 'bevestigd', 'onderweg', 'geleverd', 'verlopen'];
+
+export function statusTag(status: OrderStatus, p: Palette): {
+  bg: string;
+  dot: string;
+  text: string;
+  label: string;
+} {
+  switch (status) {
+    case 'verlopen':  return { bg: p.dangerSoft, dot: p.danger, text: p.danger, label: 'Verlopen' };
+    case 'geleverd':  return { bg: p.successSoft, dot: p.success, text: p.success, label: 'Geleverd' };
+    case 'bevestigd': return { bg: p.accentSoft, dot: p.accent, text: p.accent, label: 'Bevestigd' };
+    case 'onderweg':  return { bg: p.warningSoft, dot: p.warning, text: p.warning, label: 'Onderweg' };
+    default:          return { bg: p.accentSoft, dot: p.accent, text: p.accent, label: 'Geplaatst' };
+  }
+}
+
+/** "€482,30" → 482.30 */
+export function parseBedrag(bedrag: string): number {
+  const schoon = bedrag.replace(/[^\d,.-]/g, '').replace(',', '.');
+  return parseFloat(schoon) || 0;
+}
+
+export interface OrderStats {
+  openstaandAantal: number;
+  openstaandWaarde: number;
+  onderwegAantal: number;
+  verlopenAantal: number;
+}
+
+export function getOrderStats(orders: Order[]): OrderStats {
+  const openstaand = orders.filter((o) => o.status !== 'geleverd');
+  return {
+    openstaandAantal: openstaand.length,
+    openstaandWaarde: openstaand.reduce((s, o) => s + parseBedrag(o.total), 0),
+    onderwegAantal: orders.filter((o) => o.status === 'onderweg').length,
+    verlopenAantal: orders.filter((o) => o.status === 'verlopen').length,
+  };
+}

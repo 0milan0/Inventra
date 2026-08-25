@@ -1,23 +1,24 @@
-import { DrawerMenu } from '@/components/drawer-menu';
 import ScannerModal from '@/components/scanner-modal';
+import { ScreenHeader } from '@/components/screen-header';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { Colors } from '@/constants/theme';
-import { getProductByBarcode } from '@/data/products';
+import { getPalette, Shadow } from '@/constants/design-tokens';
+import { useAuth } from '@/contexts/auth-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { getProduct } from '@/lib/api';
 import { useIsFocused } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { StyleSheet, Text, TouchableOpacity, Vibration, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, Vibration, View } from 'react-native';
 
 export default function ScanScreen() {
-  const [drawerOpen, setDrawerOpen] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
+  const [bezig, setBezig] = useState(false);
   const colorScheme = useColorScheme();
-  const colors = Colors[colorScheme ?? 'light'];
   const isDark = colorScheme === 'dark';
+  const p = getPalette(isDark);
   const router = useRouter();
+  const { token } = useAuth();
   const isFocused = useIsFocused();
   const scanCooldownRef = useRef(0);
 
@@ -27,85 +28,71 @@ export default function ScanScreen() {
     }
   }, [isFocused]);
 
-  const runScan = (barcode: string) => {
-    if (!barcode) return;
+  const runScan = async (barcode: string): Promise<boolean> => {
+    if (!barcode || !token) return true;
     const now = Date.now();
-    if (now - scanCooldownRef.current < 1200) return;
+    if (now - scanCooldownRef.current < 1200) return true;
     scanCooldownRef.current = now;
-    const product = getProductByBarcode(barcode);
-    if (product) {
+
+    setBezig(true);
+    try {
+      await getProduct(token, barcode);
       Vibration.vibrate(80);
       setCameraOpen(false);
       router.push({ pathname: '/product/[barcode]', params: { barcode } });
-    } else {
+      return true;
+    } catch {
       Vibration.vibrate([0, 80, 60, 80]);
+      return false;
+    } finally {
+      setBezig(false);
     }
   };
 
-  const handleBarcodeScanned = (barcode: string) => {
-    if (!isFocused || !cameraOpen) return;
-    runScan(barcode);
+  const handleBarcodeScanned = (barcode: string): Promise<boolean> => {
+    if (!isFocused || !cameraOpen || bezig) return Promise.resolve(true);
+    return runScan(barcode);
   };
 
   const openCamera = () => {
     setCameraOpen(true);
   };
 
-  const tintAlpha = (opacity: string) => colors.tint + opacity;
+  const tintAlpha = (opacity: string) => p.accent + opacity;
 
   return (
     <ThemedView style={styles.container}>
-      {/* Header */}
-      <SafeAreaView edges={['top']} style={{ backgroundColor: colors.background }}>
-        <View style={[styles.header, { backgroundColor: colors.background, borderBottomColor: colors.border }]}>
-          <TouchableOpacity
-            onPress={() => setDrawerOpen(true)}
-            style={styles.hamburgerBtn}
-            accessibilityLabel="Open menu"
-          >
-            <View style={[styles.bar, { backgroundColor: colors.text }]} />
-            <View style={[styles.bar, { backgroundColor: colors.text }]} />
-            <View style={[styles.bar, { backgroundColor: colors.text, width: 12 }]} />
-          </TouchableOpacity>
+      <ScreenHeader title="Scannen" />
 
-          <ThemedText style={styles.headerTitle}>Scannen</ThemedText>
-
-          <TouchableOpacity
-            onPress={openCamera}
-            style={[styles.cameraBtn, { backgroundColor: tintAlpha('20') }]}
-            accessibilityLabel="Open scanner"
-          >
-            {/* Camera body */}
-            <View style={[styles.camBody, { borderColor: colors.tint }]}>
-              <View style={[styles.camLens, { borderColor: colors.tint }]} />
-            </View>
-            <View style={[styles.camNotch, { backgroundColor: colors.tint }]} />
-          </TouchableOpacity>
-        </View>
-      </SafeAreaView>
-
-      {/* Page body — empty placeholder with centered prompt */}
+      {/* Page body — empty placeholder with centered prompt, of laad-status na het scannen */}
       <View style={styles.body}>
-        <View style={[styles.emptyCard, { borderColor: colors.border }]}>
-          <View style={[styles.emptyIconRing, { borderColor: tintAlpha('30'), backgroundColor: tintAlpha('0D') }]}>
-            {/* Camera SVG-style icon built from Views */}
-            <View style={[styles.emptyIconBody, { borderColor: colors.tint }]}>
-              <View style={[styles.emptyIconLens, { borderColor: colors.tint }]} />
-            </View>
-            <View style={[styles.emptyIconNotch, { backgroundColor: colors.tint }]} />
+        {bezig ? (
+          <View style={[styles.emptyCard, { borderColor: p.border }]}>
+            <ActivityIndicator size="large" color={p.accent} />
+            <ThemedText style={[styles.emptyTitle, { marginTop: 14 }]}>Product opzoeken…</ThemedText>
           </View>
-          <ThemedText style={styles.emptyTitle}>Scan een product</ThemedText>
-          <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>
-            Tik op het camera-icoon rechtsboven{'\n'}om een barcode te scannen
-          </Text>
-          <TouchableOpacity
-            style={[styles.emptyBtn, { backgroundColor: colors.tint }]}
-            onPress={openCamera}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.emptyBtnText}>Open scanner</Text>
-          </TouchableOpacity>
-        </View>
+        ) : (
+          <View style={[styles.emptyCard, { borderColor: p.border }]}>
+            <View style={[styles.emptyIconRing, { borderColor: tintAlpha('30'), backgroundColor: tintAlpha('0D') }]}>
+              {/* Camera SVG-style icon built from Views */}
+              <View style={[styles.emptyIconBody, { borderColor: p.accent }]}>
+                <View style={[styles.emptyIconLens, { borderColor: p.accent }]} />
+              </View>
+              <View style={[styles.emptyIconNotch, { backgroundColor: p.accent }]} />
+            </View>
+            <ThemedText style={styles.emptyTitle}>Scan een product</ThemedText>
+            <Text style={[styles.emptySubtitle, { color: p.textSecondary }]}>
+              Tik op de knop hieronder{'\n'}om een barcode te scannen
+            </Text>
+            <TouchableOpacity
+              style={[styles.emptyBtn, { backgroundColor: p.accent }]}
+              onPress={openCamera}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.emptyBtnText}>Open scanner</Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
 
       {/* Scanner modal */}
@@ -115,52 +102,12 @@ export default function ScanScreen() {
         onClose={() => setCameraOpen(false)}
         isFocused={isFocused}
       />
-
-      <DrawerMenu isOpen={drawerOpen} onClose={() => setDrawerOpen(false)} />
     </ThemedView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-
-  /* Header */
-  header: {
-    height: 56,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 18,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  hamburgerBtn: {
-    width: 36, height: 36,
-    justifyContent: 'center', alignItems: 'flex-start',
-    gap: 5,
-  },
-  bar: { height: 2, borderRadius: 2, width: 18 },
-  headerTitle: { fontSize: 16, fontWeight: '600', letterSpacing: 0.2 },
-
-  /* Camera button */
-  cameraBtn: {
-    width: 34, height: 34, borderRadius: 17,
-    justifyContent: 'center', alignItems: 'center',
-    position: 'relative',
-  },
-  camBody: {
-    width: 16, height: 13,
-    borderWidth: 1.5, borderRadius: 3,
-    justifyContent: 'center', alignItems: 'center',
-  },
-  camLens: {
-    width: 6, height: 6,
-    borderWidth: 1.5, borderRadius: 3,
-  },
-  camNotch: {
-    position: 'absolute', top: 8, left: '50%',
-    marginLeft: -2,
-    width: 4, height: 2, borderRadius: 1,
-  },
 
   /* Empty state */
   body: {
@@ -176,6 +123,7 @@ const styles = StyleSheet.create({
     padding: 32,
     borderRadius: 20,
     borderWidth: StyleSheet.hairlineWidth,
+    ...(Shadow.card as object),
   },
   emptyIconRing: {
     width: 72, height: 72, borderRadius: 36,

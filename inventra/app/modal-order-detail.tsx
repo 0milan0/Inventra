@@ -1,5 +1,6 @@
 import { ThemedView } from '@/components/themed-view';
-import { ALL_ORDERS, type Order, type OrderProduct, type OrderStatus } from '@/data/order-data';
+import { getPalette } from '@/constants/design-tokens';
+import { ALL_ORDERS, statusTag, type Order, type OrderProduct } from '@/data/order-data';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Link, useLocalSearchParams } from 'expo-router';
 import {
@@ -10,23 +11,6 @@ import {
     View
 } from 'react-native';
 
-// ─── Status helpers ───────────────────────────────────────────────────────────
-
-function statusTag(status: OrderStatus): {
-  bg: string;
-  dot: string;
-  text: string;
-  label: string;
-} {
-  switch (status) {
-    case 'verlopen':  return { bg: '#FCEBEB', dot: '#E24B4A', text: '#A32D2D', label: 'Verlopen' };
-    case 'geleverd':  return { bg: '#EAF3DE', dot: '#1D9E75', text: '#3B6D11', label: 'Geleverd' };
-    case 'bevestigd': return { bg: '#EEEDFE', dot: '#7F77DD', text: '#534AB7', label: 'Bevestigd' };
-    case 'onderweg':  return { bg: '#FAEEDA', dot: '#EF9F27', text: '#854F0B', label: 'Onderweg' };
-    default:          return { bg: '#EEEDFE', dot: '#7F77DD', text: '#534AB7', label: 'Geplaatst' };
-  }
-}
-
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function ModalOrderDetail() {
@@ -35,12 +19,13 @@ export default function ModalOrderDetail() {
 
   const colorScheme = useColorScheme();
   const isDark = colorScheme === 'dark';
+  const p = getPalette(isDark);
 
-  const surface       = isDark ? '#2c2c2e' : '#ffffff';
-  const pageBg        = isDark ? '#1c1c1e' : '#f2f2f7';
-  const textPrimary   = isDark ? '#ffffff' : '#1a1a1a';
-  const textSecondary = isDark ? '#aaaaaa' : '#666666';
-  const border        = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
+  const surface       = p.surface;
+  const pageBg        = p.bg;
+  const textPrimary   = p.text;
+  const textSecondary = p.textSecondary;
+  const border        = p.border;
 
   if (!order) {
     return (
@@ -55,14 +40,14 @@ export default function ModalOrderDetail() {
     );
   }
 
-  const tag = statusTag(order.status);
+  const tag = statusTag(order.status, p);
 
   return (
     <ThemedView style={[styles.container, { backgroundColor: pageBg }]}>
       {/* Header */}
       <View style={[styles.header, { backgroundColor: pageBg, borderBottomColor: border }]}>
         <Link href="/orders-screen" dismissTo style={styles.closeBtn}>
-          <View style={[styles.closeBtnInner, { backgroundColor: isDark ? '#2c2c2e' : '#EEEDFE' }]}>
+          <View style={[styles.closeBtnInner, { backgroundColor: isDark ? p.surface : p.accentSoft }]}>
             <Text style={styles.closeBtnText}>✕</Text>
           </View>
         </Link>
@@ -153,9 +138,9 @@ export default function ModalOrderDetail() {
         {/* Action card – delivered */}
         {order.status === 'geleverd' && (
           <View style={[styles.card, { backgroundColor: surface, borderColor: border }]}>
-            <View style={[styles.tag, { backgroundColor: '#EAF3DE' }]}>
+            <View style={[styles.tag, { backgroundColor: p.successSoft }]}>
               <View style={[styles.tagDot, { backgroundColor: '#1D9E75' }]} />
-              <Text style={[styles.tagText, { color: '#3B6D11' }]}>Geleverd</Text>
+              <Text style={[styles.tagText, { color: p.success }]}>Geleverd</Text>
             </View>
             <Text style={[styles.cardTitle, { color: textPrimary }]}>Ontvangst bevestigen</Text>
             <Text style={[styles.cardBody, { color: textSecondary }]}>

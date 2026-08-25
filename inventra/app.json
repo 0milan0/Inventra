@@ -40,7 +40,20 @@
           }
         }
       ],
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      "expo-secure-store",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Inventra gebruikt Face ID om de app snel en veilig te ontgrendelen."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Inventra heeft toegang tot je foto's nodig om een profielfoto in te stellen."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
